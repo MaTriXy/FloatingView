@@ -1,12 +1,12 @@
 /**
  * Copyright 2015 RECRUIT LIFESTYLE CO., LTD.
- *
+ * <p>
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
- *            http://www.apache.org/licenses/LICENSE-2.0
- *
+ * <p>
+ * http://www.apache.org/licenses/LICENSE-2.0
+ * <p>
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -28,6 +28,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Message;
 import android.os.SystemClock;
+import android.support.annotation.IntDef;
 import android.util.DisplayMetrics;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -39,6 +40,8 @@ import android.view.animation.OvershootInterpolator;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.lang.ref.WeakReference;
 
 /**
@@ -83,6 +86,14 @@ class TrashView extends FrameLayout implements ViewTreeObserver.OnPreDrawListene
      * 背景・削除アイコンなどを即時に消すことを表す定数
      */
     static final int ANIMATION_FORCE_CLOSE = 3;
+
+    /**
+     * Animation State
+     */
+    @IntDef({ANIMATION_NONE, ANIMATION_OPEN, ANIMATION_CLOSE, ANIMATION_FORCE_CLOSE})
+    @Retention(RetentionPolicy.SOURCE)
+    @interface AnimationState {
+    }
 
     /**
      * 長押し判定とする時間
@@ -184,7 +195,7 @@ class TrashView extends FrameLayout implements ViewTreeObserver.OnPreDrawListene
 
         mParams = new WindowManager.LayoutParams();
         mParams.width = ViewGroup.LayoutParams.MATCH_PARENT;
-        mParams.height = ViewGroup.LayoutParams.WRAP_CONTENT;
+        mParams.height = ViewGroup.LayoutParams.MATCH_PARENT;
         mParams.type = WindowManager.LayoutParams.TYPE_PRIORITY_PHONE;
         mParams.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE |
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE |
@@ -196,8 +207,10 @@ class TrashView extends FrameLayout implements ViewTreeObserver.OnPreDrawListene
         // 各種Viewの設定
         // TrashViewに直接貼り付けられるView（このViewを介さないと、削除Viewと背景Viewのレイアウトがなぜか崩れる）
         mRootView = new FrameLayout(context);
+        mRootView.setClipChildren(false);
         // 削除アイコンのルートView
         mTrashIconRootView = new FrameLayout(context);
+        mTrashIconRootView.setClipChildren(false);
         mFixedTrashIconView = new ImageView(context);
         mActionTrashIconView = new ImageView(context);
         // 背景View
@@ -213,6 +226,7 @@ class TrashView extends FrameLayout implements ViewTreeObserver.OnPreDrawListene
 
         // 背景Viewの貼り付け
         final FrameLayout.LayoutParams backgroundParams = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (int) (BACKGROUND_HEIGHT * mMetrics.density));
+        backgroundParams.gravity = Gravity.BOTTOM;
         mRootView.addView(mBackgroundView, backgroundParams);
         // アクションアイコンの貼り付け
         final FrameLayout.LayoutParams actionTrashIconParams = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -264,6 +278,15 @@ class TrashView extends FrameLayout implements ViewTreeObserver.OnPreDrawListene
     }
 
     /**
+     * initialize ActionTrashIcon
+     */
+    @Override
+    protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        mTrashViewListener.onUpdateActionTrashIcon();
+    }
+
+    /**
      * 画面サイズから自位置を決定します。
      */
     private void updateViewLayout() {
@@ -271,7 +294,8 @@ class TrashView extends FrameLayout implements ViewTreeObserver.OnPreDrawListene
         mParams.x = (mMetrics.widthPixels - getWidth()) / 2;
         mParams.y = 0;
 
-        // アニメーション側情報を更新
+        // Update view and layout
+        mTrashViewListener.onUpdateActionTrashIcon();
         mAnimationHandler.onUpdateViewLayout();
 
         mWindowManager.updateViewLayout(this, mParams);
@@ -313,13 +337,13 @@ class TrashView extends FrameLayout implements ViewTreeObserver.OnPreDrawListene
     }
 
     /**
-     * アクションする削除アイコンのパディングを設定します。
+     * アクションする削除アイコンの設定を更新します。
      *
      * @param width  対象となるViewの幅
      * @param height 対象となるViewの高さ
      * @param shape  対象となるViewの形状
      */
-    void calcActionTrashIconPadding(float width, float height, float shape) {
+    void updateActionTrashIcon(float width, float height, float shape) {
         // アクションする削除アイコンが設定されていない場合は何もしない
         if (!hasActionTrashIcon()) {
             return;
@@ -338,11 +362,6 @@ class TrashView extends FrameLayout implements ViewTreeObserver.OnPreDrawListene
         mExitScaleAnimator = ObjectAnimator.ofPropertyValuesHolder(mActionTrashIconView, PropertyValuesHolder.ofFloat(ImageView.SCALE_X, 1.0f), PropertyValuesHolder.ofFloat(ImageView.SCALE_Y, 1.0f));
         mExitScaleAnimator.setInterpolator(new OvershootInterpolator());
         mExitScaleAnimator.setDuration(TRASH_ICON_SCALE_DURATION_MILLIS);
-
-        // 重なった際の拡大時にフィットするようにパディングの設定
-        final int horizontalPadding = Math.max((int) ((mActionTrashIconMaxScale - 1.0f) * mActionTrashIconBaseWidth / 2 + 0.5f), 0);
-        final int verticalPadding = Math.max((int) ((mActionTrashIconMaxScale - 1.0f) * mActionTrashIconBaseHeight / 2 + 0.5f), 0);
-        mActionTrashIconView.setPadding(horizontalPadding, verticalPadding, horizontalPadding, verticalPadding);
     }
 
     /**
@@ -759,6 +778,11 @@ class TrashView extends FrameLayout implements ViewTreeObserver.OnPreDrawListene
                     final float positionY = mTrashIconLimitPosition.bottom - stickyPositionY * mOvershootInterpolator.getInterpolation(translationYTimeRate);
                     trashIconRootView.setTranslationX(positionX);
                     trashIconRootView.setTranslationY(positionY);
+                    // clear drag view garbage
+                    if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.JELLY_BEAN_MR1) {
+                        clearClippedChildren(trashView.mRootView);
+                        clearClippedChildren(trashView.mTrashIconRootView);
+                    }
                 }
 
                 sendMessageAtTime(newMessage(animationCode, TYPE_UPDATE), SystemClock.uptimeMillis() + ANIMATION_REFRESH_TIME_MILLIS);
@@ -795,6 +819,15 @@ class TrashView extends FrameLayout implements ViewTreeObserver.OnPreDrawListene
                     listener.onTrashAnimationEnd(ANIMATION_FORCE_CLOSE);
                 }
             }
+        }
+
+        /**
+         * Clear the animation garbage of the target view.
+         */
+        private static void clearClippedChildren(ViewGroup viewGroup) {
+            viewGroup.setClipChildren(true);
+            viewGroup.invalidate();
+            viewGroup.setClipChildren(false);
         }
 
         /**

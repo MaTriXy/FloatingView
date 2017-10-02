@@ -1,12 +1,12 @@
 /**
  * Copyright 2015 RECRUIT LIFESTYLE CO., LTD.
- *
+ * <p>
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- *
- *            http://www.apache.org/licenses/LICENSE-2.0
- *
+ * <p>
+ * http://www.apache.org/licenses/LICENSE-2.0
+ * <p>
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -27,9 +27,13 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Message;
 import android.os.SystemClock;
+import android.support.annotation.IntDef;
 import android.support.annotation.NonNull;
+import android.support.v4.view.ViewCompat;
 import android.util.DisplayMetrics;
 import android.view.Gravity;
+import android.view.KeyCharacterMap;
+import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
@@ -39,6 +43,8 @@ import android.view.WindowManager;
 import android.view.animation.OvershootInterpolator;
 import android.widget.FrameLayout;
 
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.lang.ref.WeakReference;
 
 /**
@@ -89,6 +95,14 @@ class FloatingView extends FrameLayout implements ViewTreeObserver.OnPreDrawList
     static final int STATE_FINISHING = 2;
 
     /**
+     * AnimationState
+     */
+    @IntDef({STATE_NORMAL, STATE_INTERSECTING, STATE_FINISHING})
+    @Retention(RetentionPolicy.SOURCE)
+    @interface AnimationState {
+    }
+
+    /**
      * 長押し判定とする時間(移動操作も考慮して通常の1.5倍)
      */
     private static final int LONG_PRESS_TIMEOUT = (int) (1.5f * ViewConfiguration.getLongPressTimeout());
@@ -102,6 +116,16 @@ class FloatingView extends FrameLayout implements ViewTreeObserver.OnPreDrawList
      * デフォルトのY座標を表す値
      */
     static final int DEFAULT_Y = Integer.MIN_VALUE;
+
+    /**
+     * Default width size
+     */
+    static final int DEFAULT_WIDTH = ViewGroup.LayoutParams.WRAP_CONTENT;
+
+    /**
+     * Default height size
+     */
+    static final int DEFAULT_HEIGHT = ViewGroup.LayoutParams.WRAP_CONTENT;
 
     /**
      * WindowManager
@@ -162,9 +186,46 @@ class FloatingView extends FrameLayout implements ViewTreeObserver.OnPreDrawList
     private int mInitY;
 
     /**
+     * Initial animation running flag
+     */
+    private boolean mIsInitialAnimationRunning;
+
+    /**
+     * 初期表示時にアニメーションするフラグ
+     */
+    private boolean mAnimateInitialMove;
+
+    /**
      * ステータスバーの高さ
      */
-    private final int mStatusBarHeight;
+    private final int mBaseStatusBarHeight;
+
+    /**
+     * Current status bar's height
+     */
+    private int mStatusBarHeight;
+
+    /**
+     * Navigation bar's height(portlait)
+     */
+    private final int mBaseNavigationBarHeight;
+
+    /**
+     * Navigation bar's height
+     * Placed bottom on the screen(tablet)
+     * Or placed vertically on the screen(phone)
+     */
+    private final int mBaseNavigationBarRotatedHeight;
+
+    /**
+     * Current Navigation bar's vertical size
+     */
+    private int mNavigationBarVerticalOffset;
+
+    /**
+     * Current Navigation bar's horizontal size
+     */
+    private int mNavigationBarHorizontalOffset;
 
     /**
      * 左・右端に寄せるアニメーション
@@ -227,6 +288,16 @@ class FloatingView extends FrameLayout implements ViewTreeObserver.OnPreDrawList
     private int mMoveDirection;
 
     /**
+     * If true, it's a tablet. If false, it's a phone
+     */
+    private final boolean mIsTablet;
+
+    /**
+     * Surface.ROTATION_XXX
+     */
+    private int mRotation;
+
+    /**
      * コンストラクタ
      *
      * @param context {@link android.content.Context}
@@ -250,17 +321,27 @@ class FloatingView extends FrameLayout implements ViewTreeObserver.OnPreDrawList
         mLongPressHandler = new LongPressHandler(this);
         mMoveEdgeInterpolator = new OvershootInterpolator(MOVE_TO_EDGE_OVERSHOOT_TENSION);
         mMoveDirection = FloatingViewManager.MOVE_DIRECTION_DEFAULT;
+        final Resources resources = context.getResources();
+        mIsTablet = (resources.getConfiguration().screenLayout & Configuration.SCREENLAYOUT_SIZE_MASK) >= Configuration.SCREENLAYOUT_SIZE_LARGE;
+        mRotation = mWindowManager.getDefaultDisplay().getRotation();
 
         mMoveLimitRect = new Rect();
         mPositionLimitRect = new Rect();
 
         // ステータスバーの高さを取得
-        final Resources resources = context.getResources();
-        final int statusBarHeightId = resources.getIdentifier("status_bar_height", "dimen", "android");
-        if (statusBarHeightId > 0) {
-            mStatusBarHeight = resources.getDimensionPixelSize(statusBarHeightId);
+        mBaseStatusBarHeight = getSystemUiDimensionPixelSize(resources, "status_bar_height");
+        mStatusBarHeight = mBaseStatusBarHeight;
+
+        // get navigation bar height
+        final boolean hasMenuKey = ViewConfiguration.get(context).hasPermanentMenuKey();
+        final boolean hasBackKey = KeyCharacterMap.deviceHasKey(KeyEvent.KEYCODE_BACK);
+        if (hasMenuKey || hasBackKey) {
+            mBaseNavigationBarHeight = 0;
+            mBaseNavigationBarRotatedHeight = 0;
         } else {
-            mStatusBarHeight = 0;
+            mBaseNavigationBarHeight = getSystemUiDimensionPixelSize(resources, "navigation_bar_height");
+            final String resName = mIsTablet ? "navigation_bar_height_landscape" : "navigation_bar_width";
+            mBaseNavigationBarRotatedHeight = getSystemUiDimensionPixelSize(resources, resName);
         }
 
         // 初回描画処理用
@@ -268,12 +349,29 @@ class FloatingView extends FrameLayout implements ViewTreeObserver.OnPreDrawList
     }
 
     /**
+     * Get the System ui dimension(pixel)
+     *
+     * @param resources {@link Resources}
+     * @param resName   dimension resource name
+     * @return pixel size
+     */
+    private static int getSystemUiDimensionPixelSize(Resources resources, String resName) {
+        int pixelSize = 0;
+        final int resId = resources.getIdentifier(resName, "dimen", "android");
+        if (resId > 0) {
+            pixelSize = resources.getDimensionPixelSize(resId);
+        }
+        return pixelSize;
+    }
+
+
+    /**
      * 表示位置を決定します。
      */
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
-        updateViewLayout();
+        refreshLimitRect();
     }
 
     /**
@@ -282,7 +380,7 @@ class FloatingView extends FrameLayout implements ViewTreeObserver.OnPreDrawList
     @Override
     protected void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
-        updateViewLayout();
+        refreshLimitRect();
     }
 
     /**
@@ -291,30 +389,85 @@ class FloatingView extends FrameLayout implements ViewTreeObserver.OnPreDrawList
     @Override
     public boolean onPreDraw() {
         getViewTreeObserver().removeOnPreDrawListener(this);
+        // X座標に初期値が設定されていればデフォルト値を入れる(マージンは考慮しない)
+        if (mInitX == DEFAULT_X) {
+            mInitX = 0;
+        }
+        // Y座標に初期値が設定されていればデフォルト値を入れる
+        if (mInitY == DEFAULT_Y) {
+            mInitY = mMetrics.heightPixels - mStatusBarHeight - getMeasuredHeight();
+        }
+
+        // 初期位置を設定
+        mParams.x = mInitX;
+        mParams.y = mInitY;
+
         // 画面端に移動しない場合は指定座標に移動
         if (mMoveDirection == FloatingViewManager.MOVE_DIRECTION_NONE) {
-            mParams.x = mInitX;
-            mParams.y = mInitY;
             moveTo(mInitX, mInitY, mInitX, mInitY, false);
         } else {
-            mParams.x = 0;
-            mParams.y = mMetrics.heightPixels - mStatusBarHeight - getMeasuredHeight();
-            moveToEdge(false);
+            mIsInitialAnimationRunning = true;
+            // 初期位置から画面端に移動
+            moveToEdge(mInitX, mInitY, mAnimateInitialMove);
         }
         mIsDraggable = true;
-        mWindowManager.updateViewLayout(this, mParams);
+        updateViewLayout();
         return true;
     }
 
     /**
-     * 画面サイズから自位置を決定します。
+     * Called when the layout of the system has changed.
+     *
+     * @param isHideStatusBar     If true, the status bar is hidden
+     * @param isHideNavigationBar If true, the navigation bar is hidden
+     * @param isPortrait          If true, the device orientation is portrait
      */
-    private void updateViewLayout() {
+    void onUpdateSystemLayout(boolean isHideStatusBar, boolean isHideNavigationBar, boolean isPortrait) {
+        // status bar
+        mStatusBarHeight = isHideStatusBar ? 0 : mBaseStatusBarHeight;
+        // navigation bar
+        updateNavigationBarOffset(isHideNavigationBar, isPortrait);
+        refreshLimitRect();
+    }
+
+    /**
+     * Update offset of NavigationBar.
+     *
+     * @param isHideNavigationBar If true, the navigation bar is hidden
+     * @param isPortrait          If true, the device orientation is portrait
+     */
+    private void updateNavigationBarOffset(boolean isHideNavigationBar, boolean isPortrait) {
+        if (!isHideNavigationBar) {
+            mNavigationBarVerticalOffset = 0;
+            mNavigationBarHorizontalOffset = 0;
+            return;
+        }
+
+        // If the portrait, is displayed at the bottom of the screen
+        if (isPortrait) {
+            mNavigationBarVerticalOffset = mBaseNavigationBarHeight;
+            mNavigationBarHorizontalOffset = 0;
+            return;
+        }
+
+        // If it is a Tablet, it will appear at the bottom of the screen.
+        // If it is Phone, it will appear on the side of the screen
+        if (mIsTablet) {
+            mNavigationBarVerticalOffset = mBaseNavigationBarRotatedHeight;
+            mNavigationBarHorizontalOffset = 0;
+        } else {
+            mNavigationBarVerticalOffset = 0;
+            mNavigationBarHorizontalOffset = mBaseNavigationBarRotatedHeight;
+        }
+    }
+
+    /**
+     * Update the PositionLimitRect and MoveLimitRect according to the screen size change.
+     */
+    private void refreshLimitRect() {
         cancelAnimation();
 
         // 前の画面座標を保存
-        final int oldScreenHeight = mMetrics.heightPixels;
-        final int oldScreenWidth = mMetrics.widthPixels;
         final int oldPositionLimitWidth = mPositionLimitRect.width();
         final int oldPositionLimitHeight = mPositionLimitRect.height();
 
@@ -326,42 +479,31 @@ class FloatingView extends FrameLayout implements ViewTreeObserver.OnPreDrawList
         final int newScreenHeight = mMetrics.heightPixels;
 
         // 移動範囲の設定
-        mMoveLimitRect.set(-width, -height * 2, newScreenWidth + width, newScreenHeight + height);
-        mPositionLimitRect.set(-mOverMargin, 0, newScreenWidth - width + mOverMargin, newScreenHeight - mStatusBarHeight - height);
+        mMoveLimitRect.set(-width, -height * 2, newScreenWidth + width + mNavigationBarHorizontalOffset, newScreenHeight + height + mNavigationBarVerticalOffset);
+        mPositionLimitRect.set(-mOverMargin, 0, newScreenWidth - width + mOverMargin + mNavigationBarHorizontalOffset, newScreenHeight - mStatusBarHeight - height + mNavigationBarVerticalOffset);
 
-        // 縦横切替の場合
-        if (oldScreenWidth != newScreenWidth || oldScreenHeight != newScreenHeight) {
-            // 画面端に移動する場合は現在の位置から左右端を設定
-            if (mMoveDirection == FloatingViewManager.MOVE_DIRECTION_DEFAULT) {
-                // 右半分にある場合
-                if (mParams.x > (newScreenWidth - width) / 2) {
-                    mParams.x = mPositionLimitRect.right;
-                }
-                // 左半分にある場合
-                else {
-                    mParams.x = mPositionLimitRect.left;
-                }
-            }
-            // 左端に移動
-            else if (mMoveDirection == FloatingViewManager.MOVE_DIRECTION_LEFT) {
-                mParams.x = mPositionLimitRect.left;
-            }
-            // 右端に移動
-            else if (mMoveDirection == FloatingViewManager.MOVE_DIRECTION_RIGHT) {
-                mParams.x = mPositionLimitRect.right;
-            }
-            // 画面端に移動しない場合は画面座標の比率から計算
-            else {
-                final int newX = (int) (mParams.x * mPositionLimitRect.width() / (float) oldPositionLimitWidth + 0.5f);
-                mParams.x = Math.min(Math.max(mPositionLimitRect.left, newX), mPositionLimitRect.right);
-            }
-
-            // スクリーン位置の比率からY座標を設定(四捨五入)
-            final int newY = (int) (mParams.y * mPositionLimitRect.height() / (float) oldPositionLimitHeight + 0.5f);
-            mParams.y = Math.min(Math.max(mPositionLimitRect.top, newY), mPositionLimitRect.bottom);
-            mWindowManager.updateViewLayout(this, mParams);
+        // Initial animation stop when the device rotates
+        final int newRotation = mWindowManager.getDefaultDisplay().getRotation();
+        if (mAnimateInitialMove && mRotation != newRotation) {
+            mIsInitialAnimationRunning = false;
         }
 
+        // When animation is running and the device is not rotating
+        if (mIsInitialAnimationRunning && mRotation == newRotation) {
+            moveToEdge(mParams.x, mParams.y, true);
+        } else {
+            // If there is a screen change during the operation, move to the appropriate position
+            if (mIsMoveAccept) {
+                moveToEdge(mParams.x, mParams.y, false);
+            } else {
+                final int newX = (int) (mParams.x * mPositionLimitRect.width() / (float) oldPositionLimitWidth + 0.5f);
+                final int goalPositionX = Math.min(Math.max(mPositionLimitRect.left, newX), mPositionLimitRect.right);
+                final int newY = (int) (mParams.y * mPositionLimitRect.height() / (float) oldPositionLimitHeight + 0.5f);
+                final int goalPositionY = Math.min(Math.max(mPositionLimitRect.top, newY), mPositionLimitRect.bottom);
+                moveTo(mParams.x, mParams.y, goalPositionX, goalPositionY, false);
+            }
+        }
+        mRotation = newRotation;
     }
 
     /**
@@ -394,6 +536,7 @@ class FloatingView extends FrameLayout implements ViewTreeObserver.OnPreDrawList
         mScreenTouchX = event.getRawX();
         mScreenTouchY = event.getRawY();
         final int action = event.getAction();
+        boolean isWaitForMoveToEdge = false;
         // 押下
         if (action == MotionEvent.ACTION_DOWN) {
             // アニメーションのキャンセル
@@ -414,6 +557,7 @@ class FloatingView extends FrameLayout implements ViewTreeObserver.OnPreDrawList
             // 押下処理の通過判定のための時間保持
             // mIsDraggableやgetVisibility()のフラグが押下後に変更された場合にMOVE等を処理させないようにするため
             mTouchDownTime = event.getDownTime();
+            mIsInitialAnimationRunning = false;
         }
         // 移動
         else if (action == MotionEvent.ACTION_MOVE) {
@@ -450,24 +594,28 @@ class FloatingView extends FrameLayout implements ViewTreeObserver.OnPreDrawList
             // 拡大率をもとに戻す
             setScale(SCALE_NORMAL);
 
-            // 動かされていれば画面端に戻す
-            if (mIsMoveAccept) {
-                moveToEdge(true);
-            }
-            // 動かされていなければ、クリックイベントを発行
-            else {
-                if (!tmpIsLongPressed) {
-                    final int size = getChildCount();
-                    for (int i = 0; i < size; i++) {
-                        getChildAt(i).performClick();
-                    }
+
+            // When ACTION_UP is done (when not pressed or moved)
+            if (action == MotionEvent.ACTION_UP && !tmpIsLongPressed && !mIsMoveAccept) {
+                final int size = getChildCount();
+                for (int i = 0; i < size; i++) {
+                    getChildAt(i).performClick();
                 }
+            } else {
+                // Make a move after checking whether it is finished or not
+                isWaitForMoveToEdge = true;
             }
         }
 
         // タッチリスナを通知
         if (mOnTouchListener != null) {
             mOnTouchListener.onTouch(this, event);
+        }
+
+        // Lazy execution of moveToEdge
+        if (isWaitForMoveToEdge && mAnimationHandler.getState() != STATE_FINISHING) {
+            // include device rotation
+            moveToEdge(true);
         }
 
         return true;
@@ -518,32 +666,23 @@ class FloatingView extends FrameLayout implements ViewTreeObserver.OnPreDrawList
      * @param withAnimation アニメーションを行う場合はtrue.行わない場合はfalse
      */
     private void moveToEdge(boolean withAnimation) {
-        //TODO:縦軸の速度も考慮して斜めに行くようにする
-        // X・Y座標と移動方向を設定
         final int currentX = getXByTouch();
         final int currentY = getYByTouch();
-        final int goalPositionX;
-        // 画面端に移動する場合は画面端の座標を設定
-        if (mMoveDirection == FloatingViewManager.MOVE_DIRECTION_DEFAULT) {
-            final boolean isMoveRightEdge = currentX > (mMetrics.widthPixels - getWidth()) / 2;
-            goalPositionX = isMoveRightEdge ? mPositionLimitRect.right : mPositionLimitRect.left;
-        }
-        // 左端への移動
-        else if (mMoveDirection == FloatingViewManager.MOVE_DIRECTION_LEFT) {
-            goalPositionX = mPositionLimitRect.left;
-        }
-        // 右端への移動
-        else if (mMoveDirection == FloatingViewManager.MOVE_DIRECTION_RIGHT) {
-            goalPositionX = mPositionLimitRect.right;
-        }
-        // 画面端に移動しない場合は、現在の座標のまま
-        else {
-            goalPositionX = currentX;
-        }
-        // TODO:Y座標もアニメーションさせる
-        final int goalPositionY = currentY;
+        moveToEdge(currentX, currentY, withAnimation);
+    }
+
+    /**
+     * 始点を指定して左右の端に移動します。
+     *
+     * @param startX        X座標の初期値
+     * @param startY        Y座標の初期値
+     * @param withAnimation アニメーションを行う場合はtrue.行わない場合はfalse
+     */
+    private void moveToEdge(int startX, int startY, boolean withAnimation) {
         // 指定座標に移動
-        moveTo(currentX, currentY, goalPositionX, goalPositionY, withAnimation);
+        final int goalPositionX = getGoalPositionX(startX, startY);
+        final int goalPositionY = getGoalPositionY(startX, startY);
+        moveTo(startX, startY, goalPositionX, goalPositionY, withAnimation);
     }
 
     /**
@@ -563,16 +702,31 @@ class FloatingView extends FrameLayout implements ViewTreeObserver.OnPreDrawList
         // アニメーションを行う場合
         if (withAnimation) {
             // TODO:Y座標もアニメーションさせる
-            mParams.y = goalPositionY;
 
-            mMoveEdgeAnimator = ValueAnimator.ofInt(currentX, goalPositionX);
-            mMoveEdgeAnimator.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
-                @Override
-                public void onAnimationUpdate(ValueAnimator animation) {
-                    mParams.x = (Integer) animation.getAnimatedValue();
-                    mWindowManager.updateViewLayout(FloatingView.this, mParams);
-                }
-            });
+            //to move only y-coord
+            if (goalPositionX == currentX) {
+                mMoveEdgeAnimator = ValueAnimator.ofInt(currentY, goalPositionY);
+                mMoveEdgeAnimator.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
+                    @Override
+                    public void onAnimationUpdate(ValueAnimator animation) {
+                        mParams.y = (Integer) animation.getAnimatedValue();
+                        updateViewLayout();
+                        updateInitAnimation(animation);
+                    }
+                });
+            } else {
+                // to move only x coord (to left or right)
+                mParams.y = goalPositionY;
+                mMoveEdgeAnimator = ValueAnimator.ofInt(currentX, goalPositionX);
+                mMoveEdgeAnimator.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
+                    @Override
+                    public void onAnimationUpdate(ValueAnimator animation) {
+                        mParams.x = (Integer) animation.getAnimatedValue();
+                        updateViewLayout();
+                        updateInitAnimation(animation);
+                    }
+                });
+            }
             // X軸のアニメーション設定
             mMoveEdgeAnimator.setDuration(MOVE_TO_EDGE_DURATION);
             mMoveEdgeAnimator.setInterpolator(mMoveEdgeInterpolator);
@@ -582,7 +736,7 @@ class FloatingView extends FrameLayout implements ViewTreeObserver.OnPreDrawList
             if (mParams.x != goalPositionX || mParams.y != goalPositionY) {
                 mParams.x = goalPositionX;
                 mParams.y = goalPositionY;
-                mWindowManager.updateViewLayout(FloatingView.this, mParams);
+                updateViewLayout();
             }
         }
         // タッチ座標を初期化
@@ -591,6 +745,86 @@ class FloatingView extends FrameLayout implements ViewTreeObserver.OnPreDrawList
         mScreenTouchDownX = 0;
         mScreenTouchDownY = 0;
         mIsMoveAccept = false;
+    }
+
+    /**
+     * Check if it is attached to the Window and call WindowManager.updateLayout()
+     */
+    private void updateViewLayout() {
+        if (!ViewCompat.isAttachedToWindow(this)) {
+            return;
+        }
+        mWindowManager.updateViewLayout(this, mParams);
+    }
+
+    /**
+     * Update animation initialization flag
+     *
+     * @param animation {@link ValueAnimator}
+     */
+    private void updateInitAnimation(ValueAnimator animation) {
+        if (mAnimateInitialMove && animation.getDuration() <= animation.getCurrentPlayTime()) {
+            mIsInitialAnimationRunning = false;
+        }
+    }
+
+    /**
+     * Get the final point of movement (X coordinate)
+     *
+     * @param startX Initial value of X coordinate
+     * @param startY Initial value of Y coordinate
+     * @return End point of X coordinate
+     */
+    private int getGoalPositionX(int startX, int startY) {
+        int goalPositionX = startX;
+
+        // Move to left or right edges
+        if (mMoveDirection == FloatingViewManager.MOVE_DIRECTION_DEFAULT) {
+            final boolean isMoveRightEdge = startX > (mMetrics.widthPixels - getWidth()) / 2;
+            goalPositionX = isMoveRightEdge ? mPositionLimitRect.right : mPositionLimitRect.left;
+        }
+        // Move to left edges
+        else if (mMoveDirection == FloatingViewManager.MOVE_DIRECTION_LEFT) {
+            goalPositionX = mPositionLimitRect.left;
+        }
+        // Move to right edges
+        else if (mMoveDirection == FloatingViewManager.MOVE_DIRECTION_RIGHT) {
+            goalPositionX = mPositionLimitRect.right;
+        }
+        // Move to top/bottom/left/right edges
+        else if (mMoveDirection == FloatingViewManager.MOVE_DIRECTION_NEAREST) {
+            final int distLeftRight = Math.min(startX, mPositionLimitRect.width() - startX);
+            final int distTopBottom = Math.min(startY, mPositionLimitRect.height() - startY);
+            if (distLeftRight < distTopBottom) {
+                final boolean isMoveRightEdge = startX > (mMetrics.widthPixels - getWidth()) / 2;
+                goalPositionX = isMoveRightEdge ? mPositionLimitRect.right : mPositionLimitRect.left;
+            }
+        }
+
+        return goalPositionX;
+    }
+
+    /**
+     * Get the final point of movement (Y coordinate)
+     *
+     * @param startX Initial value of X coordinate
+     * @param startY Initial value of Y coordinate
+     * @return End point of Y coordinate
+     */
+    private int getGoalPositionY(int startX, int startY) {
+        int goalPositionY = startY;
+
+        // Move to top/bottom/left/right edges
+        if (mMoveDirection == FloatingViewManager.MOVE_DIRECTION_NEAREST) {
+            final int distLeftRight = Math.min(startX, mPositionLimitRect.width() - startX);
+            final int distTopBottom = Math.min(startY, mPositionLimitRect.height() - startY);
+            if (distLeftRight >= distTopBottom) {
+                final boolean isMoveTopEdge = startY < (mMetrics.heightPixels - getHeight()) / 2;
+                goalPositionY = isMoveTopEdge ? mPositionLimitRect.top : mPositionLimitRect.bottom;
+            }
+        }
+
+        return goalPositionY;
     }
 
     /**
@@ -665,12 +899,7 @@ class FloatingView extends FrameLayout implements ViewTreeObserver.OnPreDrawList
      * @param moveDirection 移動方向
      */
     void setMoveDirection(int moveDirection) {
-        // デフォルトから変更されていたら画面端に移動しない
-        if (mInitX != DEFAULT_X || mInitY != DEFAULT_Y) {
-            mMoveDirection = FloatingViewManager.MOVE_DIRECTION_NONE;
-        } else {
-            mMoveDirection = moveDirection;
-        }
+        mMoveDirection = moveDirection;
     }
 
     /**
@@ -682,6 +911,15 @@ class FloatingView extends FrameLayout implements ViewTreeObserver.OnPreDrawList
     void setInitCoords(int x, int y) {
         mInitX = x;
         mInitY = y;
+    }
+
+    /**
+     * 初期表示時にアニメーションするフラグを設定します。
+     *
+     * @param animateInitialMove 初期表示時にアニメーションする場合はtrue
+     */
+    void setAnimateInitialMove(boolean animateInitialMove) {
+        mAnimateInitialMove = animateInitialMove;
     }
 
     /**
@@ -717,7 +955,7 @@ class FloatingView extends FrameLayout implements ViewTreeObserver.OnPreDrawList
      * @return FloatingViewのY座標
      */
     private int getYByTouch() {
-        return (int) (mMetrics.heightPixels - (mScreenTouchY - mLocalTouchY + getHeight()));
+        return (int) (mMetrics.heightPixels + mNavigationBarVerticalOffset - (mScreenTouchY - mLocalTouchY + getHeight()));
     }
 
     /**
@@ -744,6 +982,7 @@ class FloatingView extends FrameLayout implements ViewTreeObserver.OnPreDrawList
      */
     void setFinishing() {
         mAnimationHandler.setState(STATE_FINISHING);
+        mIsMoveAccept = false;
         setVisibility(View.GONE);
     }
 
@@ -863,7 +1102,6 @@ class FloatingView extends FrameLayout implements ViewTreeObserver.OnPreDrawList
             final int animationCode = msg.what;
             final int animationType = msg.arg1;
             final WindowManager.LayoutParams params = floatingView.mParams;
-            final WindowManager windowManager = floatingView.mWindowManager;
 
             // 状態変更またはアニメーションを開始した場合の初期化
             if (mIsChangeState || animationType == TYPE_FIRST) {
@@ -888,7 +1126,7 @@ class FloatingView extends FrameLayout implements ViewTreeObserver.OnPreDrawList
                 final float targetPositionY = Math.min(Math.max(moveLimitRect.top, (int) mTouchPositionY), moveLimitRect.bottom);
                 params.x = (int) (mStartX + (targetPositionX - mStartX) * basePosition);
                 params.y = (int) (mStartY + (targetPositionY - mStartY) * basePosition);
-                windowManager.updateViewLayout(floatingView, params);
+                floatingView.updateViewLayout();
                 sendMessageAtTime(newMessage(animationCode, TYPE_UPDATE), SystemClock.uptimeMillis() + ANIMATION_REFRESH_TIME_MILLIS);
             }
             // 重なった場合のアニメーション
@@ -900,7 +1138,7 @@ class FloatingView extends FrameLayout implements ViewTreeObserver.OnPreDrawList
                 // 現在地からの移動
                 params.x = (int) (mStartX + (targetPositionX - mStartX) * basePosition);
                 params.y = (int) (mStartY + (targetPositionY - mStartY) * basePosition);
-                windowManager.updateViewLayout(floatingView, params);
+                floatingView.updateViewLayout();
                 sendMessageAtTime(newMessage(animationCode, TYPE_UPDATE), SystemClock.uptimeMillis() + ANIMATION_REFRESH_TIME_MILLIS);
             }
 
@@ -985,7 +1223,7 @@ class FloatingView extends FrameLayout implements ViewTreeObserver.OnPreDrawList
          *
          * @param newState STATE_NORMAL or STATE_INTERSECTING or STATE_FINISHING
          */
-        void setState(int newState) {
+        void setState(@AnimationState int newState) {
             // 状態が異なった場合のみ状態を変更フラグを変える
             if (mState != newState) {
                 mIsChangeState = true;
@@ -1012,7 +1250,7 @@ class FloatingView extends FrameLayout implements ViewTreeObserver.OnPreDrawList
         /**
          * TrashView
          */
-        private WeakReference<FloatingView> mFloatingView;
+        private final WeakReference<FloatingView> mFloatingView;
 
         /**
          * アニメーションなしの状態を表す定数

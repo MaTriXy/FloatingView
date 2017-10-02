@@ -3,25 +3,24 @@ package jp.co.recruit_lifestyle.sample.fragment;
 import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.app.Fragment;
+import android.app.FragmentTransaction;
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.CountDownTimer;
 import android.provider.Settings;
-import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 
 import jp.co.recruit.floatingview.R;
 import jp.co.recruit_lifestyle.sample.service.ChatHeadService;
-import jp.co.recruit_lifestyle.sample.service.FloatingAdService;
+import jp.co.recruit_lifestyle.sample.service.CustomFloatingViewService;
 
 
 /**
- * 設定画面のフラグメントです。
+ * FloatingViewのメイン画面となるフラグメントです。
  */
 public class FloatingViewControlFragment extends Fragment {
 
@@ -31,27 +30,20 @@ public class FloatingViewControlFragment extends Fragment {
     private static final String TAG = "FloatingViewControl";
 
     /**
-     * CountDownTimer
-     */
-    private CountDownTimer mTimer;
-
-    /**
      * シンプルなFloatingViewを表示するフローのパーミッション許可コード
      */
     private static final int CHATHEAD_OVERLAY_PERMISSION_REQUEST_CODE = 100;
 
     /**
-     * 広告連携のFloatingViewを表示するフローのパーミッション許可コード
+     * カスタマイズFloatingViewを表示するフローのパーミッション許可コード
      */
-    private static final int FLOATINGAD_OVERLAY_PERMISSION_REQUEST_CODE = 101;
+    private static final int CUSTOM_OVERLAY_PERMISSION_REQUEST_CODE = 101;
 
     /**
      * FloatingViewControlFragmentを生成します。
      */
     public static FloatingViewControlFragment newInstance() {
-        FloatingViewControlFragment fragment = new FloatingViewControlFragment();
-        Bundle args = new Bundle();
-        fragment.setArguments(args);
+        final FloatingViewControlFragment fragment = new FloatingViewControlFragment();
         return fragment;
     }
 
@@ -66,57 +58,33 @@ public class FloatingViewControlFragment extends Fragment {
      * {@inheritDoc}
      */
     @Override
-    public void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        mTimer = new CountDownTimer(3000L, 3000L) {
-            @Override
-            public void onTick(long millisUntilFinished) {
-                // do nothing
-            }
-
-            @Override
-            public void onFinish() {
-                final Context context = getActivity();
-                final boolean canShow = showFloatingAd(context);
-                if (!canShow) {
-                    // 広告トリガーのFloatingViewの表示許可設定
-                    @SuppressLint("InlinedApi")
-                    final Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + context.getPackageName()));
-                    startActivityForResult(intent, FLOATINGAD_OVERLAY_PERMISSION_REQUEST_CODE);
-                }
-            }
-        };
-
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    @Override
     public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
         final View rootView = inflater.inflate(R.layout.fragment_floating_view_control, container, false);
         // デモの表示
-        rootView.findViewById(R.id.showDemo).setOnClickListener(new View.OnClickListener() {
+        rootView.findViewById(R.id.show_demo).setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                final Context context = getActivity();
-                final boolean canShow = showChatHead(context);
-                if (!canShow) {
-                    // シンプルなFloatingViewの表示許可設定
-                    @SuppressLint("InlinedApi")
-                    final Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + context.getPackageName()));
-                    startActivityForResult(intent, CHATHEAD_OVERLAY_PERMISSION_REQUEST_CODE);
-                }
+                showChatHead(getActivity(), true);
             }
         });
-        // 広告の表示
-        rootView.findViewById(R.id.showAd).setOnClickListener(new View.OnClickListener() {
+        // カスタマイズデモの表示
+        rootView.findViewById(R.id.show_customized_demo).setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                mTimer.start();
-                Log.d(TAG, getString(R.string.ad_click_message));
+                showCustomFloatingView(getActivity(), true);
             }
         });
+        // 設定画面の表示
+        rootView.findViewById(R.id.show_settings).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                final FragmentTransaction ft = getFragmentManager().beginTransaction();
+                ft.replace(R.id.container, FloatingViewSettingsFragment.newInstance());
+                ft.addToBackStack(null);
+                ft.commit();
+            }
+        });
+
         return rootView;
     }
 
@@ -127,74 +95,63 @@ public class FloatingViewControlFragment extends Fragment {
     @TargetApi(Build.VERSION_CODES.M)
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
         if (requestCode == CHATHEAD_OVERLAY_PERMISSION_REQUEST_CODE) {
-            final Context context = getActivity();
-            final boolean canShow = showChatHead(context);
-            if (!canShow) {
-                Log.w(TAG, getString(R.string.permission_denied));
-            }
-        } else if (requestCode == FLOATINGAD_OVERLAY_PERMISSION_REQUEST_CODE) {
-            final Context context = getActivity();
-            final boolean canShow = showFloatingAd(context);
-            if (!canShow) {
-                Log.w(TAG, getString(R.string.permission_denied));
-            }
+            showChatHead(getActivity(), false);
+        } else if (requestCode == CUSTOM_OVERLAY_PERMISSION_REQUEST_CODE) {
+            showCustomFloatingView(getActivity(), false);
         }
-    }
-
-    /**
-     * {@inheritDoc}
-     */
-    @Override
-    public void onDestroy() {
-        if (mTimer != null) {
-            mTimer.cancel();
-        }
-        super.onDestroy();
     }
 
     /**
      * シンプルなFloatingViewの表示
      *
-     * @param context Context
-     * @return 表示できる場合はtrue, 表示できない場合はfalse
+     * @param context                 Context
+     * @param isShowOverlayPermission 表示できなかった場合に表示許可の画面を表示するフラグ
      */
     @SuppressLint("NewApi")
-    private boolean showChatHead(Context context) {
+    private void showChatHead(Context context, boolean isShowOverlayPermission) {
         // API22以下かチェック
         if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.LOLLIPOP_MR1) {
             context.startService(new Intent(context, ChatHeadService.class));
-            return true;
+            return;
         }
 
         // 他のアプリの上に表示できるかチェック
         if (Settings.canDrawOverlays(context)) {
             context.startService(new Intent(context, ChatHeadService.class));
-            return true;
+            return;
         }
 
-        return false;
+        // オーバレイパーミッションの表示
+        if (isShowOverlayPermission) {
+            final Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + context.getPackageName()));
+            startActivityForResult(intent, CHATHEAD_OVERLAY_PERMISSION_REQUEST_CODE);
+        }
     }
 
     /**
-     * 広告表示のFloatingViewの表示
+     * カスタマイズFloatingViewの表示
      *
-     * @param context Context
-     * @return 表示できる場合はtrue, 表示できない場合はfalse
+     * @param context                 Context
+     * @param isShowOverlayPermission 表示できなかった場合に表示許可の画面を表示するフラグ
      */
     @SuppressLint("NewApi")
-    private boolean showFloatingAd(Context context) {
+    private void showCustomFloatingView(Context context, boolean isShowOverlayPermission) {
         // API22以下かチェック
         if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.LOLLIPOP_MR1) {
-            context.startService(new Intent(context, FloatingAdService.class));
-            return true;
+            context.startService(new Intent(context, CustomFloatingViewService.class));
+            return;
         }
 
         // 他のアプリの上に表示できるかチェック
         if (Settings.canDrawOverlays(context)) {
-            context.startService(new Intent(context, FloatingAdService.class));
-            return true;
+            context.startService(new Intent(context, CustomFloatingViewService.class));
+            return;
         }
 
-        return false;
+        // オーバレイパーミッションの表示
+        if (isShowOverlayPermission) {
+            final Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + context.getPackageName()));
+            startActivityForResult(intent, CUSTOM_OVERLAY_PERMISSION_REQUEST_CODE);
+        }
     }
 }
