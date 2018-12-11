@@ -1,6 +1,6 @@
 # FloatingView
 The Android project is View to display information such as chat in front.  
-To API Level 14 or later are supported  
+To API Level 14 or higher are supported
 
 ## Screenshots
 ![](./screenshot/animation.gif)  
@@ -12,7 +12,7 @@ To API Level 14 or later are supported
 [SimpleFloating](http://youtu.be/nb8M2p0agF4)
 
 ## Requirements
-Target Sdk Version : 26  
+Target Sdk Version : 28  
 Min Sdk Version : 14  
 
 ## How to use
@@ -25,7 +25,7 @@ Min Sdk Version : 14
   }
 
   dependencies {
-    compile 'com.github.recruit-lifestyle:FloatingView:2.2.3'
+    implementation 'com.github.recruit-lifestyle:FloatingView:2.4.0'
   }
   ```
   
@@ -66,6 +66,7 @@ Describe the process (`onFinishFloatingView`) that is called when you exit the F
 5) Add the permission to AndroidManifest
 ```xml
  <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+ <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 ```  
   
 6) Define the Service to AndroidManifest
@@ -83,9 +84,25 @@ example)
 ```
   
 7) Describe the process to start the Service (run on foreground)
+
+
+example)  
+
+- FloatingViewControlFragment.java  
+
 ```java
     final Intent intent = new Intent(activity, ChatHeadService.class);
     ContextCompat.startForegroundService(activity, intent);
+```
+
+- ChatHeadService.java  
+
+```java
+public int onStartCommand(Intent intent, int flags, int startId) {
+    ...
+    startForeground(NOTIFICATION_ID, createNotification(this));
+    ...
+}
 ```
 
 8) Create notification channel (targetSdkVersion >= 26)
@@ -103,6 +120,29 @@ if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
 }
 
 ```
+
+9) Add DisplayCutout process(API Level >= 28)
+
+Call `FloatingViewManager.findCutoutSafeArea(activity)`.  
+Note: Activity must be portrait oriented.  
+Note: You must not set `windowLayoutInDisplayCutoutMode` to `never`.  
+
+example)
+
+- FloatingViewControlFragment.java
+
+```java
+final Intent intent = new Intent(activity, ChatHeadService.class);
+intent.putExtra(ChatHeadService.EXTRA_CUTOUT_SAFE_AREA, FloatingViewManager.findCutoutSafeArea(activity));
+ContextCompat.startForegroundService(activity, intent);
+```
+
+- ChatHeadService.java
+
+```java
+mFloatingViewManager.setSafeInsetRect((Rect) intent.getParcelableExtra(EXTRA_CUTOUT_SAFE_AREA));
+```
+
 
 ## Static Options
 It can be set only when displaying for the first time
@@ -122,7 +162,8 @@ mFloatingViewManager.addViewToWindow(iconView, options);
 |floatingViewY|Y coordinate of initial display<br>(default) top of display|  
 |floatingViewWidth|FloatingView width<br>(default) The width of the layout added to FloatingView |  
 |floatingViewHeight|FloatingView height<br>(default) The height of the layout added to FloatingView|  
-|moveDirection|`FloatingViewManager.MOVE_DIRECTION_DEFAULT`:Left end or right end(default)<br> `FloatingViewManager.MOVE_DIRECTION_LEFT`:Left end<br>`FloatingViewManager.MOVE_DIRECTION_RIGHT`:Right end<br>`FloatingViewManager.MOVE_DIRECTION_NONE`:Not move<br>`FloatingViewManager.MOVE_DIRECTION_NEAREST`:Move nearest edge|  
+|moveDirection|`FloatingViewManager.MOVE_DIRECTION_DEFAULT`:Left end or right end(default)<br> `FloatingViewManager.MOVE_DIRECTION_LEFT`:Left end<br>`FloatingViewManager.MOVE_DIRECTION_RIGHT`:Right end<br>`FloatingViewManager.MOVE_DIRECTION_NONE`:Not move<br>`FloatingViewManager.MOVE_DIRECTION_NEAREST`:Move nearest edge<br>`FloatingViewManager.MOVE_DIRECTION_THROWN`:Move in the throwing direction (left end or right end)|
+|usePhysics|Use physics-based animation(depends on `moveDirection`)<br>(default) true<br>Info:If `MOVE_DIRECTION_NEAREST` is set, nothing happens<br>Info:Can not be used before API 16|
 |animateInitialMove|If true, animation when first displayed<br>(FloatingViewX, floatingViewY) to screen edge<br>Info: If `MOVE_DIRECTION_NONE` is set, nothing happens|  
 
 ## Dynamic Options
