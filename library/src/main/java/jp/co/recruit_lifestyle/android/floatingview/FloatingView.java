@@ -27,14 +27,14 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.Message;
 import android.os.SystemClock;
-import android.support.animation.DynamicAnimation;
-import android.support.animation.FlingAnimation;
-import android.support.animation.FloatValueHolder;
-import android.support.animation.SpringAnimation;
-import android.support.animation.SpringForce;
-import android.support.annotation.IntDef;
-import android.support.annotation.NonNull;
-import android.support.v4.view.ViewCompat;
+import androidx.dynamicanimation.animation.DynamicAnimation;
+import androidx.dynamicanimation.animation.FlingAnimation;
+import androidx.dynamicanimation.animation.FloatValueHolder;
+import androidx.dynamicanimation.animation.SpringAnimation;
+import androidx.dynamicanimation.animation.SpringForce;
+import androidx.annotation.IntDef;
+import androidx.annotation.NonNull;
+import androidx.core.view.ViewCompat;
 import android.util.DisplayMetrics;
 import android.view.Gravity;
 import android.view.KeyCharacterMap;
@@ -427,7 +427,8 @@ class FloatingView extends FrameLayout implements ViewTreeObserver.OnPreDrawList
         mParams.type = OVERLAY_TYPE;
         mParams.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE |
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS |
-                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL;
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL |
+                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED;
         mParams.format = PixelFormat.TRANSLUCENT;
         // 左下の座標を0とする
         mParams.gravity = Gravity.LEFT | Gravity.BOTTOM;
@@ -783,20 +784,35 @@ class FloatingView extends FrameLayout implements ViewTreeObserver.OnPreDrawList
      * {@inheritDoc}
      */
     @Override
-    public boolean dispatchTouchEvent(@NonNull MotionEvent event) {
+    public boolean onInterceptTouchEvent(@NonNull MotionEvent event) {
+        return dispatchTouchEvent(event, true);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    @Override
+    public boolean onTouchEvent(@NonNull MotionEvent event) {
+        return dispatchTouchEvent(event, false);
+    }
+
+    /**
+     * Use onInterceptTouchEvent to detect FloatView move then onTouchEvent consume event
+     */
+    private boolean dispatchTouchEvent(@NonNull MotionEvent event, boolean isOnInterceptTouchEvent) {
         // Viewが表示されていなければ何もしない
         if (getVisibility() != View.VISIBLE) {
-            return true;
+            return false;
         }
 
         // タッチ不能な場合は何もしない
         if (!mIsDraggable) {
-            return true;
+            return false;
         }
 
         // Block while initial display animation is running
         if (mIsInitialAnimationRunning) {
-            return true;
+            return false;
         }
 
         // 現在位置のキャッシュ
@@ -846,11 +862,11 @@ class FloatingView extends FrameLayout implements ViewTreeObserver.OnPreDrawList
             }
             // 押下処理が行われていない場合は処理しない
             if (mTouchDownTime != event.getDownTime()) {
-                return true;
+                return !isOnInterceptTouchEvent;
             }
             // 移動受付状態でない、かつX,Y軸ともにしきい値よりも小さい場合
             if (!mIsMoveAccept && Math.abs(mScreenTouchX - mScreenTouchDownX) < mMoveThreshold && Math.abs(mScreenTouchY - mScreenTouchDownY) < mMoveThreshold) {
-                return true;
+                return !isOnInterceptTouchEvent;
             }
             mIsMoveAccept = true;
             mAnimationHandler.updateTouchPosition(getXByTouch(), getYByTouch());
@@ -878,18 +894,14 @@ class FloatingView extends FrameLayout implements ViewTreeObserver.OnPreDrawList
             // 拡大率をもとに戻す
             setScale(SCALE_NORMAL);
 
-            // destroy VelocityTracker
-            if (!mIsMoveAccept) {
+            // destroy VelocityTracker (#103)
+            if (!mIsMoveAccept && mVelocityTracker != null) {
                 mVelocityTracker.recycle();
                 mVelocityTracker = null;
             }
 
             // When ACTION_UP is done (when not pressed or moved)
             if (action == MotionEvent.ACTION_UP && !tmpIsLongPressed && !mIsMoveAccept) {
-                final int size = getChildCount();
-                for (int i = 0; i < size; i++) {
-                    getChildAt(i).performClick();
-                }
             } else {
                 // Make a move after checking whether it is finished or not
                 isWaitForMoveToEdge = true;
@@ -911,7 +923,7 @@ class FloatingView extends FrameLayout implements ViewTreeObserver.OnPreDrawList
             }
         }
 
-        return true;
+        return !isOnInterceptTouchEvent || mIsMoveAccept;
     }
 
     /**

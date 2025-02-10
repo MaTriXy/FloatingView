@@ -23,15 +23,16 @@ import android.content.res.Resources;
 import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
 import android.os.Build;
-import android.support.annotation.DrawableRes;
-import android.support.annotation.IntDef;
-import android.support.annotation.NonNull;
-import android.support.v4.view.ViewCompat;
+import androidx.annotation.DrawableRes;
+import androidx.annotation.IntDef;
+import androidx.annotation.NonNull;
+import androidx.core.view.ViewCompat;
 import android.util.DisplayMetrics;
 import android.view.DisplayCutout;
 import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
 
@@ -594,10 +595,12 @@ public class FloatingViewManager implements ScreenChangedListener, View.OnTouchL
      * @param view {@link View}
      */
     private void removeViewImmediate(View view) {
-        if (!ViewCompat.isAttachedToWindow(view)) {
-            return;
+        // fix #100(crashes on Android 8)
+        try {
+            mWindowManager.removeViewImmediate(view);
+        } catch (IllegalArgumentException e) {
+            //do nothing
         }
-        mWindowManager.removeViewImmediate(view);
     }
 
     /**
@@ -614,8 +617,14 @@ public class FloatingViewManager implements ScreenChangedListener, View.OnTouchL
             return safeInsetRect;
         }
 
+        // Fix: getDisplayCutout() on a null object reference (issue #110)
+        final WindowInsets windowInsets = activity.getWindow().getDecorView().getRootWindowInsets();
+        if (windowInsets == null) {
+            return safeInsetRect;
+        }
+
         // set safeInsetRect
-        final DisplayCutout displayCutout = activity.getWindow().getDecorView().getRootWindowInsets().getDisplayCutout();
+        final DisplayCutout displayCutout = windowInsets.getDisplayCutout();
         if (displayCutout != null) {
             safeInsetRect.set(displayCutout.getSafeInsetLeft(), displayCutout.getSafeInsetTop(), displayCutout.getSafeInsetRight(), displayCutout.getSafeInsetBottom());
         }

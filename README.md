@@ -1,5 +1,7 @@
 # FloatingView
-The Android project is View to display information such as chat in front.  
+[Archived] Use instead: https://developer.android.com/guide/topics/ui/bubbles
+
+The Android project is View to display information such as chat in front.
 To API Level 14 or higher are supported
 
 ## Screenshots
@@ -25,7 +27,7 @@ Min Sdk Version : 14
   }
 
   dependencies {
-    implementation 'com.github.recruit-lifestyle:FloatingView:2.4.0'
+    implementation 'com.github.recruit-lifestyle:FloatingView:2.4.4'
   }
   ```
   
